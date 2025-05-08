@@ -344,7 +344,10 @@
       print(factory, reproducible = TRUE)
     Output
       <async/generator>
-      function() { await(NULL); yield(NULL) }
+      function() {
+              await(NULL)
+              yield(NULL)
+          }
 
 ---
 
@@ -352,7 +355,10 @@
       print(factory, internals = TRUE, reproducible = TRUE)
     Output
       <async/generator>
-      function() { await(NULL); yield(NULL) }
+      function() {
+              await(NULL)
+              yield(NULL)
+          }
       State machine:
       {
           if (exhausted) {
@@ -392,7 +398,10 @@
       print(instance, reproducible = TRUE)
     Output
       <async/generator/instance>
-      function() { await(NULL); yield(NULL) }
+      function() {
+              await(NULL)
+              yield(NULL)
+          }
 
 ---
 
@@ -400,7 +409,10 @@
       print(instance, internals = TRUE, reproducible = TRUE)
     Output
       <async/generator/instance>
-      function() { await(NULL); yield(NULL) }
+      function() {
+              await(NULL)
+              yield(NULL)
+          }
       State machine:
       {
           if (exhausted) {

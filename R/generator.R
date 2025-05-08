@@ -182,7 +182,7 @@ generator0 <- function(fn, type = "generator") {
 
                 # Called on cleanup to close all iterators active in
                 # ongoing `for` loops
-                env$close_active_iterators <- function() {
+                close_active_iterators <- function() {
                     # The list is ordered from outermost to innermost for loops.
                     # Close them in reverse order,
                     # from most nested to least nested.
@@ -190,6 +190,7 @@ generator0 <- function(fn, type = "generator") {
                         if (!is_null(iter)) iter_close(iter)
                     }
                 }
+                env$close_active_iterators <- close_active_iterators
 
                 env$cleanup <- function() {
                     env$close_active_iterators()
