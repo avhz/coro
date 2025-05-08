@@ -209,171 +209,177 @@
 #' take(iter, 5)
 #' take_chr(iter, 5)
 reduce_steps <- function(x, steps, builder, init) {
-  builder <- as_closure(builder)
+    builder <- as_closure(builder)
 
-  # Seal the transformation chain by supplying a builder function
-  # (step reducer) to the steps wrapper (transducer). The stack of
-  # transformation steps should have been composed in reverse order
-  # (as is the default in `compose()`). This way the builder is
-  # supplied to the very last step in the chain of transformations,
-  # which itself is supplied to the penultimate step and so on. Input
-  # data will then flow from outermost steps to innermost ones up to
-  # the builder step which decides how to handle this result.
-  if (is_null(steps)) {
-    reducer <- builder
-  } else {
-    reducer <- steps(builder)
-  }
-  stopifnot(is_closure(reducer))
+    # Seal the transformation chain by supplying a builder function
+    # (step reducer) to the steps wrapper (transducer). The stack of
+    # transformation steps should have been composed in reverse order
+    # (as is the default in `compose()`). This way the builder is
+    # supplied to the very last step in the chain of transformations,
+    # which itself is supplied to the penultimate step and so on. Input
+    # data will then flow from outermost steps to innermost ones up to
+    # the builder step which decides how to handle this result.
+    if (is_null(steps)) {
+        reducer <- builder
+    } else {
+        reducer <- steps(builder)
+    }
+    stopifnot(is_closure(reducer))
 
-  # A builder called without argument should return an init value,
-  # typically its identity. If a `steps` wrapper is supplied, this
-  # causes transducers to call their wrapped steps without arguments
-  # up until the builder step.
-  if (missing(init)) {
-    identity <- reducer()
-  } else {
-    identity <- init
-  }
+    # A builder called without argument should return an init value,
+    # typically its identity. If a `steps` wrapper is supplied, this
+    # causes transducers to call their wrapped steps without arguments
+    # up until the builder step.
+    if (missing(init)) {
+        identity <- reducer()
+    } else {
+        identity <- init
+    }
 
-  # This reduction causes a loop over the data. If `steps` was
-  # supplied the data flows through all transducers wrapped in
-  # `reducer`.
-  result <- reduce(x, reducer, .init = identity)
+    # This reduction causes a loop over the data. If `steps` was
+    # supplied the data flows through all transducers wrapped in
+    # `reducer`.
+    result <- reduce(x, reducer, .init = identity)
 
-  # Calling without input triggers completion within all
-  # transformation steps.
-  reducer(result)
+    # Calling without input triggers completion within all
+    # transformation steps.
+    reducer(result)
 }
 
 
 into <- function(to, from, steps = NULL) {
-  stopifnot(is_vector(to))
-  reduce_steps(from, steps, along_builder(to))
+    stopifnot(is_vector(to))
+    reduce_steps(from, steps, along_builder(to))
 }
 
 # From purrr. The only change is that this reduce() function supports
 # reduced objects for early termination of reducing.
 reduce <- function(.x, .f, ..., .init) {
-  reduce_impl(.x, .f, ..., .init = .init)
+    reduce_impl(.x, .f, ..., .init = .init)
 }
 
 reduce_impl <- function(.x, .f, ..., .init, .left = TRUE) {
-  if (is.object(.x)) {
-    .x <- as_iterator(.x)
-  }
-  if (is_closure(.x)) {
-    return(iter_reduce_impl(.x, .f, ..., .left = .left))
-  }
-
-  result <- reduce_init(.x, .init, left = .left)
-  idx <- reduce_index(.x, .init, left = .left)
-
-  .f <- as_closure(.f)
-  for (i in idx) {
-    result <- .f(result, .x[[i]], ...)
-
-    # Return early if we get a reduced result
-    if (is_done_box(result)) {
-      return(unbox(result))
+    if (is.object(.x)) {
+        .x <- as_iterator(.x)
     }
-  }
+    if (is_closure(.x)) {
+        return(iter_reduce_impl(.x, .f, ..., .left = .left))
+    }
 
-  result
+    result <- reduce_init(.x, .init, left = .left)
+    idx <- reduce_index(.x, .init, left = .left)
+
+    .f <- as_closure(.f)
+    for (i in idx) {
+        result <- .f(result, .x[[i]], ...)
+
+        # Return early if we get a reduced result
+        if (is_done_box(result)) {
+            return(unbox(result))
+        }
+    }
+
+    result
 }
 reduce_init <- function(x, init, left = TRUE) {
-  if (missing(init)) {
-    if (is_empty(x)) {
-      abort("`.x` is empty, and no `.init` supplied")
-    } else if (left) {
-      x[[1]]
+    if (missing(init)) {
+        if (is_empty(x)) {
+            abort("`.x` is empty, and no `.init` supplied")
+        } else if (left) {
+            x[[1]]
+        } else {
+            x[[length(x)]]
+        }
     } else {
-      x[[length(x)]]
+        init
     }
-  } else {
-    init
-  }
 }
 reduce_index <- function(x, init, left = TRUE) {
-  n <- length(x)
+    n <- length(x)
 
-  if (missing(init)) {
-    if (left) {
-      seq2(2L, n)
+    if (missing(init)) {
+        if (left) {
+            seq2(2L, n)
+        } else {
+            rev(seq2(1L, n - 1L))
+        }
     } else {
-      rev(seq2(1L, n - 1L))
+        if (left) {
+            seq_len(n)
+        } else {
+            rev(seq_len(n))
+        }
     }
-  } else {
-    if (left) {
-      seq_len(n)
-    } else {
-      rev(seq_len(n))
-    }
-  }
 }
 
 iter_reduce_impl <- function(.x, .f, ..., .init, .left = TRUE) {
-  if (!.left) {
-    abort("Can't right-reduce with an iterator.")
-  }
-
-  # TODO: How do we close transducers?
-  defer(iter_close(.x))
-
-  .f <- as_function(.f)
-
-  out <- NULL
-
-  while (!is_exhausted(new <- .x())) {
-    out <- .f(out, new, ...)
-
-    # Return early if we get a reduced result
-    if (is_done_box(out)) {
-      return(unbox(out))
+    if (!.left) {
+        abort("Can't right-reduce with an iterator.")
     }
-  }
 
-  out
+    # TODO: How do we close transducers?
+    defer(iter_close(.x))
+
+    .f <- as_function(.f)
+
+    out <- NULL
+
+    while (!is_exhausted(new <- .x())) {
+        out <- .f(out, new, ...)
+
+        # Return early if we get a reduced result
+        if (is_done_box(out)) {
+            return(unbox(out))
+        }
+    }
+
+    out
 }
 
-on_load(async_reduce_steps %<~% async(function(x, steps, builder, init) {
-  builder <- as_closure(builder)
+on_load(
+    async_reduce_steps %<~%
+        async(function(x, steps, builder, init) {
+            builder <- as_closure(builder)
 
-  if (is_null(steps)) {
-    reducer <- builder
-  } else {
-    reducer <- steps(builder)
-  }
-  stopifnot(is_closure(reducer))
+            if (is_null(steps)) {
+                reducer <- builder
+            } else {
+                reducer <- steps(builder)
+            }
+            stopifnot(is_closure(reducer))
 
-  if (missing(init)) {
-    identity <- reducer()
-  } else {
-    identity <- init
-  }
+            if (missing(init)) {
+                identity <- reducer()
+            } else {
+                identity <- init
+            }
 
-  result <- await(async_reduce(x, reducer))
+            result <- await(async_reduce(x, reducer))
 
-  reducer(result)
-}))
+            reducer(result)
+        })
+)
 
-on_load(async_reduce %<~% async(function(.x, .f, ...) {
-  out <- NULL
+on_load(
+    async_reduce %<~%
+        async(function(.x, .f, ...) {
+            out <- NULL
 
-  while (TRUE) {
-    new <- await(.x())
+            while (TRUE) {
+                new <- await(.x())
 
-    if (is_exhausted(new)) {
-      break
-    }
+                if (is_exhausted(new)) {
+                    break
+                }
 
-    out <- .f(out, new, ...)
+                out <- .f(out, new, ...)
 
-    # Return early if we get a reduced result
-    if (is_done_box(out)) {
-      return(unbox(out))
-    }
-  }
+                # Return early if we get a reduced result
+                if (is_done_box(out)) {
+                    return(unbox(out))
+                }
+            }
 
-  out
-}))
+            out
+        })
+)

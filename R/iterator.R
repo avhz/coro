@@ -87,14 +87,15 @@ NULL
 #' @rdname iterator
 #' @export
 exhausted <- function() {
-  as.symbol(".__exhausted__.")
+    as.symbol(".__exhausted__.")
 }
 #' @rdname iterator
 #' @param x An object.
 #' @export
 is_exhausted <- function(x) {
-  identical(x, exhausted())
+    identical(x, exhausted())
 }
+
 
 #' Transform an object to an iterator
 #'
@@ -126,41 +127,36 @@ is_exhausted <- function(x) {
 #' i <- as_iterator(1:3)
 #' loop(for (x in i) print(x))
 as_iterator <- function(x) {
-  UseMethod("as_iterator")
+    UseMethod("as_iterator")
 }
+
 #' @rdname as_iterator
 #' @export
 as_iterator.default <- function(x) {
-  if (is_closure(x)) {
-    return(x)
-  }
+    if (is_closure(x)) return(x)
 
-  # This uses `length()` and `{{` rather than `vec_size()` and
-  # `vec_slice2()` for compatibility with base R because
-  # `as_iterator()` is used in generators to instrument for loops
-  n <- length(x)
-  i <- 0L
+    # This uses `length()` and `{{` rather than `vec_size()` and
+    # `vec_slice2()` for compatibility with base R because
+    # `as_iterator()` is used in generators to instrument for loops
+    n <- length(x)
+    i <- 0L
 
-  function() {
-    if (i == n) {
-      return(exhausted())
+    function() {
+        if (i == n) return(exhausted())
+        i <<- i + 1L
+        x[[i]]
     }
-
-    i <<- i + 1L
-    x[[i]]
-  }
 }
-
 
 
 #' @export
 as_iterator.python.builtin.object <- function(x) {
-  x <- reticulate::as_iterator(x)
-  function() reticulate::iter_next(x, exhausted())
+    x <- reticulate::as_iterator(x)
+    function() reticulate::iter_next(x, exhausted())
 }
 
 iter_close <- function(iter) {
-  if ("close" %in% names(formals(iter))) {
-    iter(close = TRUE)
-  }
+    if ("close" %in% names(formals(iter))) {
+        iter(close = TRUE)
+    }
 }

@@ -102,275 +102,295 @@
 #' tally(2)
 #' tally(10)
 generator <- function(fn) {
-  assert_lambda(substitute(fn))
-  generator0(fn)
+    assert_lambda(substitute(fn))
+    generator0(fn)
 }
 
 #' @rdname generator
 #' @param expr A yielding expression.
 #' @export
 gen <- function(expr) {
-  fn <- new_function(NULL, substitute(expr), caller_env())
-  generator0(fn)()
+    fn <- new_function(NULL, substitute(expr), caller_env())
+    generator0(fn)()
 }
 
 generator0 <- function(fn, type = "generator") {
-  state_machine <- NULL
-  fmls <- formals(fn)
-  env <- environment(fn)
+    state_machine <- NULL
+    fmls <- formals(fn)
+    env <- environment(fn)
 
-  # Flipped when `coro_debug()` is applied on a generator factory
-  debugged <- FALSE
+    # Flipped when `coro_debug()` is applied on a generator factory
+    debugged <- FALSE
 
-  `_parent` <- environment()
+    `_parent` <- environment()
 
-  # Create the generator factory (returned by `generator()` and
-  # entered by `async()`)
-  factory <- new_function(fmls, quote({
-    # Evaluate here so the formals of the generator factory do not
-    # mask our variables
-    `_private` <- rlang::env(`_parent`)
-    `_private`$generator_env <- base::environment()
-    `_private`$caller_env <- base::parent.frame()
+    # Create the generator factory (returned by `generator()` and
+    # entered by `async()`)
+    factory <- new_function(
+        fmls,
+        quote({
+            # Evaluate here so the formals of the generator factory do not
+            # mask our variables
+            `_private` <- rlang::env(`_parent`)
+            `_private`$generator_env <- base::environment()
+            `_private`$caller_env <- base::parent.frame()
 
-    base::local(envir = `_private`, {
-      generator_env <- environment()$generator_env
-      caller_env <- environment()$caller_env
+            base::local(envir = `_private`, {
+                generator_env <- environment()$generator_env
+                caller_env <- environment()$caller_env
 
-      # Prevent lints about unknown bindings
-      exits <- NULL
-      exited <- NULL
-      cleanup <- NULL
-      close_active_iterators <- NULL
+                # Prevent lints about unknown bindings
+                exits <- NULL
+                exited <- NULL
+                cleanup <- NULL
+                close_active_iterators <- NULL
 
-      info <- machine_info(type, env = caller_env)
+                info <- machine_info(type, env = caller_env)
 
-      # Generate the state machine lazily at runtime
-      if (is_null(state_machine)) {
-        state_machine <<- walk_states(body(fn), info = info)
-      }
+                # Generate the state machine lazily at runtime
+                if (is_null(state_machine)) {
+                    state_machine <<- walk_states(body(fn), info = info)
+                }
 
-      ops <- info$async_ops
-      if (!is_null(ops) && !is_installed(ops$package)) {
-        abort(sprintf("The %s package must be installed.", ops$package))
-      }
+                ops <- info$async_ops
+                if (!is_null(ops) && !is_installed(ops$package)) {
+                    msg <- sprintf(
+                        "The %s package must be installed.",
+                        ops$package
+                    )
+                    abort(msg)
+                }
 
-      env <- new_generator_env(env, info)
-      user_env <- env$user_env
+                env <- new_generator_env(env, info)
+                user_env <- env$user_env
 
-      # The compiler caches function bodies, so inline a weak reference to avoid
-      # leaks (#36). This weak reference is injected inside the body of the
-      # generator instance to work around a scoping issue. See where we install
-      # the user's exit handlers.
-      weak_env <- new_weakref(env)
+                # The compiler caches function bodies, so inline a weak reference to avoid
+                # leaks (#36). This weak reference is injected inside the body of the
+                # generator instance to work around a scoping issue. See where we install
+                # the user's exit handlers.
+                weak_env <- new_weakref(env)
 
-      # Forward arguments inside the user space of the state machine
-      lapply(names(fmls), function(arg) env_bind_arg(user_env, arg, frame = generator_env))
+                # Forward arguments inside the user space of the state machine
+                lapply(
+                    names(fmls),
+                    function(arg)
+                        env_bind_arg(user_env, arg, frame = generator_env)
+                )
 
-      # Flipped when `f` is pressed in the browser
-      undebugged <- FALSE
+                # Flipped when `f` is pressed in the browser
+                undebugged <- FALSE
 
-      # Called on cleanup to close all iterators active in
-      # ongoing `for` loops
-      close_active_iterators <- function() {
-        # The list is ordered from outermost to innermost for loops. Close them
-        # in reverse order, from most nested to least nested.
-        for (iter in rev(env$iterators)) {
-          if (!is_null(iter)) {
-            iter_close(iter)
-          }
-        }
-      }
+                # Called on cleanup to close all iterators active in
+                # ongoing `for` loops
+                env$close_active_iterators <- function() {
+                    # The list is ordered from outermost to innermost for loops.
+                    # Close them in reverse order,
+                    # from most nested to least nested.
+                    for (iter in rev(env$iterators)) {
+                        if (!is_null(iter)) iter_close(iter)
+                    }
+                }
 
-      env$close_active_iterators <- close_active_iterators
+                env$cleanup <- function() {
+                    env$close_active_iterators()
 
-      env$cleanup <- function() {
-        env$close_active_iterators()
+                    # Prevent user exit handlers from running again
+                    env$exits <- NULL
+                }
 
-        # Prevent user exit handlers from running again
-        env$exits <- NULL
-      }
+                # Create the generator instance. This is a function that resumes
+                # a state machine.
+                instance <- inject(function(arg, close = FALSE) {
+                    # Forward generator argument inside the state machine environment
+                    delayedAssign("arg", arg, assign.env = env)
+                    delayedAssign("close", close, assign.env = env)
 
+                    if (
+                        !undebugged &&
+                            (debugged || is_true(peek_option("coro_debug")))
+                    ) {
+                        env_browse(user_env)
+                        defer({
+                            # `f` was pressed, disable debugging for this generator
+                            if (!env_is_browsed(user_env)) {
+                                undebugged <<- TRUE
+                            }
+                        })
+                    }
 
-      # Create the generator instance. This is a function that resumes
-      # a state machine.
-      instance <- inject(function(arg, close = FALSE) {
-        # Forward generator argument inside the state machine environment
-        delayedAssign("arg", arg, assign.env = env)
-        delayedAssign("close", close, assign.env = env)
+                    if (is_true(env$exhausted)) return(exhausted())
 
-        if (!undebugged && (debugged || is_true(peek_option("coro_debug")))) {
-          env_browse(user_env)
+                    if (close) {
+                        # Prevent returning here as closing should be idempotent. We set
+                        # ourselves as exhausted _before_ running any cleanup in case of
+                        # failures. An exit handler shouldn't fail and it's expected that any
+                        # failure prevents other handlers from running, including when an
+                        # attempt is made at resuming the closed generator.
+                        env$exhausted <- TRUE
 
-          defer({
-            # `f` was pressed, disable debugging for this generator
-            if (!env_is_browsed(user_env)) {
-              undebugged <<- TRUE
-            }
-          })
-        }
+                        # First close active iterators. Should be first since they might be
+                        # relying on resources set by the user.
+                        close_active_iterators()
 
-        if (is_true(env$exhausted)) {
-          return(exhausted())
-        }
+                        # Now run the user's exit expressions. Achieved by running restoring
+                        # user exits in the user environment and running an empty eval there.
+                        # Unlike in the state machine path, where these expressions are meant
+                        # to only run in case of unexpected exits, we don't disable them
+                        # before exiting so they will actually run here.
+                        evalq(
+                            envir = user_env,
+                            base::evalq(envir = rlang::wref_key(!!weak_env), {
+                                env_poke_exits(user_env, exits)
+                            })
+                        )
 
-        if (close) {
-          # Prevent returning here as closing should be idempotent. We set
-          # ourselves as exhausted _before_ running any cleanup in case of
-          # failures. An exit handler shouldn't fail and it's expected that any
-          # failure prevents other handlers from running, including when an
-          # attempt is made at resuming the closed generator.
-          env$exhausted <- TRUE
+                        return(exhausted())
+                    }
 
-          # First close active iterators. Should be first since they might be
-          # relying on resources set by the user.
-          close_active_iterators()
+                    # Disable generator on error, interrupt, debugger quit, etc.
+                    # There is no safe way of resuming a generator that didn't
+                    # suspend normally.
+                    if (is_true(env$jumped)) {
+                        # In case a scheduler calls back the generator for error
+                        # handling or cleanup
+                        if (!missing(arg)) {
+                            force(arg)
+                        }
+                        abort(
+                            "This function has been disabled because of an unexpected exit."
+                        )
+                    }
 
-          # Now run the user's exit expressions. Achieved by running restoring
-          # user exits in the user environment and running an empty eval there.
-          # Unlike in the state machine path, where these expressions are meant
-          # to only run in case of unexpected exits, we don't disable them
-          # before exiting so they will actually run here.
-          evalq(envir = user_env,
-            base::evalq(envir = rlang::wref_key(!!weak_env), {
-              env_poke_exits(user_env, exits)
+                    # Resume state machine. Set up an execution env in the user
+                    # environment first to serve as a target for on.exit()
+                    # expressions. Then evaluate state machine in its private
+                    # environment.
+                    env$jumped <- TRUE
+                    env$exited <- TRUE
+
+                    out <- evalq(envir = user_env, {
+                        base::evalq(envir = rlang::wref_key(!!weak_env), {
+                            defer(if (exited) cleanup())
+                            env_poke_exits(user_env, exits)
+                            !!state_machine
+                        })
+                    })
+                    env$jumped <- FALSE
+
+                    out
+                })
+
+                env$.self <- instance
+
+                if (is_string(type, "async")) {
+                    # Step into the generator right away
+                    invisible(instance(NULL))
+                } else {
+                    structure(instance, class = "coro_generator_instance")
+                }
             })
-          )
-
-          return(exhausted())
-        }
-
-        # Disable generator on error, interrupt, debugger quit, etc.
-        # There is no safe way of resuming a generator that didn't
-        # suspend normally.
-        if (is_true(env$jumped)) {
-          # In case a scheduler calls back the generator for error
-          # handling or cleanup
-          if (!missing(arg)) {
-            force(arg)
-          }
-          abort("This function has been disabled because of an unexpected exit.")
-        }
-
-        # Resume state machine. Set up an execution env in the user
-        # environment first to serve as a target for on.exit()
-        # expressions. Then evaluate state machine in its private
-        # environment.
-        env$jumped <- TRUE
-        env$exited <- TRUE
-
-        out <- evalq(envir = user_env, {
-          base::evalq(envir = rlang::wref_key(!!weak_env), {
-            defer(if (exited) cleanup())
-            env_poke_exits(user_env, exits)
-            !!state_machine
-          })
         })
-        env$jumped <- FALSE
+    )
 
-        out
-      })
-
-      env$.self <- instance
-
-      if (is_string(type, "async")) {
-        # Step into the generator right away
-        invisible(instance(NULL))
-      } else {
-        structure(instance, class = "coro_generator_instance")
-      }
-    })
-  }))
-
-  structure(factory, class = c(paste0("coro_", type), "function"))
+    structure(factory, class = c(paste0("coro_", type), "function"))
 }
 
 # Creates a child of the coro namespace that holds all the variables
 # used by the generator runtime
 new_generator_env <- function(parent, info) {
-  env <- env(ns_env("coro"))
-  user_env <- env(parent, .__generator_instance__. = TRUE)
+    env <- env(ns_env("coro"))
+    user_env <- env(parent, .__generator_instance__. = TRUE)
 
-  env$user_env <- user_env
-  env$exhausted <- FALSE
-  env$state <- 1L
-  env$iterators <- list()
-  env$handlers <- list()
-  env$exits <- NULL
-  env$exited <- TRUE
-  env$.last_value <- NULL
+    env$user_env <- user_env
+    env$exhausted <- FALSE
+    env$state <- 1L
+    env$iterators <- list()
+    env$handlers <- list()
+    env$exits <- NULL
+    env$exited <- TRUE
+    env$.last_value <- NULL
 
-  with(env, {
-    user <- function(expr) {
-      .last_value <<- eval_bare(substitute(expr), user_env)
+    with(env, {
+        user <- function(expr) {
+            .last_value <<- eval_bare(substitute(expr), user_env)
+        }
+        last_value <- function() {
+            .last_value
+        }
+        suspend <- function() {
+            exited <<- FALSE
+            exits <<- env_poke_exits(user_env, NULL)
+        }
+    })
+
+    if (!is_null(info$async_ops)) {
+        env$then <- info$async_ops$then
+        env$as_promise <- info$async_ops$as_promise
     }
-    last_value <- function() {
-      .last_value
-    }
 
-    suspend <- function() {
-      exited <<- FALSE
-      exits <<- env_poke_exits(user_env, NULL)
-    }
-  })
-
-  if (!is_null(info$async_ops)) {
-    env$then <- info$async_ops$then
-    env$as_promise <- info$async_ops$as_promise
-  }
-
-  env
+    env
 }
 
 env_bind_arg <- function(env, arg, frame = caller_env()) {
-  if (identical(arg, "...")) {
-    env[["..."]] <- env_get(frame, "...", inherit = TRUE, default = missing_arg())
-  } else {
-    env_bind_lazy(env, !!arg := !!sym(arg), .eval_env = frame)
-  }
+    if (identical(arg, "...")) {
+        env[["..."]] <- env_get(
+            frame,
+            "...",
+            inherit = TRUE,
+            default = missing_arg()
+        )
+    } else {
+        env_bind_lazy(env, !!arg := !!sym(arg), .eval_env = frame)
+    }
 }
 
 #' @export
 print.coro_generator <- function(x, ..., internals = FALSE) {
-  writeLines("<generator>")
-  print_generator(x, ..., internals = internals)
+    writeLines("<generator>")
+    print_generator(x, ..., internals = internals)
 }
+
 #' @export
 print.coro_generator_instance <- function(x, ..., internals = FALSE) {
-  type <- env_get(fn_env(x), "type", inherit = TRUE)
+    type <- env_get(fn_env(x), "type", inherit = TRUE)
 
-  if (is_string(type, "async_generator")) {
-    writeLines("<async/generator/instance>")
-  } else {
-    writeLines("<generator/instance>")
-  }
+    if (is_string(type, "async_generator")) {
+        writeLines("<async/generator/instance>")
+    } else {
+        writeLines("<generator/instance>")
+    }
 
-  print_generator(x, ..., internals = internals)
+    print_generator(x, ..., internals = internals)
 }
 
 print_generator <- function(x, ..., internals = FALSE, reproducible = FALSE) {
-  fn <- env_get(fn_env(x), "fn", inherit = TRUE)
+    fn <- env_get(fn_env(x), "fn", inherit = TRUE)
 
-  if (reproducible) {
-    fn <- zap_env(fn)
-  }
+    if (reproducible) {
+        fn <- zap_env(fn)
+    }
 
-  print(fn, ...)
+    print(fn, ...)
 
-  if (internals) {
-    print_state_machine(x, ...)
-  }
+    if (internals) {
+        print_state_machine(x, ...)
+    }
 
-  invisible(x)
+    invisible(x)
 }
-print_state_machine <- function(x, ...) {
-  machine <- with(env(fn_env(x)), {
-    info <- machine_info(type, env = global_env())
-    state_machine %||% walk_states(body(fn), info = info)
-  })
 
-  writeLines("State machine:")
-  print(machine, ...)
+print_state_machine <- function(x, ...) {
+    machine <- with(
+        env(fn_env(x)),
+        state_machine %||%
+            walk_states(
+                body(fn),
+                info = machine_info(type, env = global_env())
+            )
+    )
+
+    writeLines("State machine:")
+    print(machine, ...)
 }
 
 
@@ -396,7 +416,7 @@ print_state_machine <- function(x, ...) {
 #' @seealso [generator()] for examples.
 #' @export
 yield <- function(x) {
-  abort("`yield()` can't be called directly or within function arguments")
+    abort("`yield()` can't be called directly or within function arguments")
 }
 
 #' Debug a generator or async function
@@ -414,34 +434,40 @@ yield <- function(x) {
 #'
 #' @export
 coro_debug <- function(fn, value = TRUE) {
-  if (!is_generator_factory(fn)) {
-    abort("`fn` must be a `generator()`, `async()`, or `async_generator()` function.")
-  }
+    if (!is_generator_factory(fn)) {
+        abort(
+            "`fn` must be a `generator()`, `async()`, or `async_generator()` function."
+        )
+    }
 
-  env_poke(fn_env(fn), "debugged", value, create = FALSE)
+    env_poke(fn_env(fn), "debugged", value, create = FALSE)
 }
 
 is_generator_factory <- function(x) {
-  inherits_any(x, c(
-    "coro_generator",
-    "coro_async",
-    "coro_async_generator"
-  ))
+    inherits_any(
+        x,
+        c(
+            "coro_generator",
+            "coro_async",
+            "coro_async_generator"
+        )
+    )
 }
 
 with_try_catch <- function(handlers, expr) {
-  inject(tryCatch(expr, !!!handlers))
+    inject(tryCatch(expr, !!!handlers))
 }
 
+
 utils::globalVariables(c(
-  "last_value",
-  "state",
-  "arg",
-  ".self",
-  "then",
-  "as_promise",
-  "user",
-  "exits",
-  "suspend",
-  "generator_env"
+    "last_value",
+    "state",
+    "arg",
+    ".self",
+    "then",
+    "as_promise",
+    "user",
+    "exits",
+    "suspend",
+    "generator_env"
 ))

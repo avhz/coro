@@ -38,47 +38,48 @@
 #' loop(for (x in abc) print(x))
 #' @export
 collect <- function(x, n = NULL) {
-  steps <- n %&&% iter_take(n)
-  reduce_steps(x, steps, along_builder(list()))
+    steps <- n %&&% iter_take(n)
+    reduce_steps(x, steps, along_builder(list()))
 }
+
 #' @rdname collect
 #' @param loop A `for` loop expression.
 #' @export
 loop <- function(loop) {
-  loop <- substitute(loop)
-  if (!is_call(loop, "for")) {
-    abort("`loop` must be a `for` expression.")
-  }
-
-  env <- caller_env()
-
-  if (is_true(env$.__generator_instance__.)) {
-    abort(c(
-      "Can't use `loop()` within a generator.",
-      i = "`for` loops already support iterators in generator functions."
-    ))
-  }
-
-  args <- node_cdr(loop)
-  var <- as_string(node_car(args))
-  iterator <- as_iterator(eval_bare(node_cadr(args), env))
-  body <- node_cadr(node_cdr(args))
-
-  defer(iter_close(iterator))
-
-  elt <- NULL
-  advance <- function() !is_exhausted(elt <<- iterator())
-  update <- function() env[[var]] <- elt
-
-  loop <- expr(
-    while (!!call2(advance)) {
-      !!call2(update)
-      !!body
+    loop <- substitute(loop)
+    if (!is_call(loop, "for")) {
+        abort("`loop` must be a `for` expression.")
     }
-  )
-  eval_bare(loop, env)
 
-  invisible(exhausted())
+    env <- caller_env()
+
+    if (is_true(env$.__generator_instance__.)) {
+        abort(c(
+            "Can't use `loop()` within a generator.",
+            i = "`for` loops already support iterators in generator functions."
+        ))
+    }
+
+    args <- node_cdr(loop)
+    var <- as_string(node_car(args))
+    iterator <- as_iterator(eval_bare(node_cadr(args), env))
+    body <- node_cadr(node_cdr(args))
+
+    defer(iter_close(iterator))
+
+    elt <- NULL
+    advance <- function() !is_exhausted(elt <<- iterator())
+    update <- function() env[[var]] <- elt
+
+    loop <- expr(
+        while (!!call2(advance)) {
+            !!call2(update)
+            !!body
+        }
+    )
+    eval_bare(loop, env)
+
+    invisible(exhausted())
 }
 
 
@@ -107,6 +108,6 @@ loop <- function(loop) {
 #' })
 #' @export
 async_collect <- function(x, n = NULL) {
-  steps <- n %&&% iter_take(n)
-  async_reduce_steps(x, steps, along_builder(list()))
+    steps <- n %&&% iter_take(n)
+    async_reduce_steps(x, steps, along_builder(list()))
 }

@@ -60,14 +60,15 @@
 #' }
 #' @export
 async <- function(fn) {
-  assert_lambda(substitute(fn))
-  generator0(fn, type = "async")
+    assert_lambda(substitute(fn))
+    generator0(fn, type = "async")
 }
+
 #' @rdname async
 #' @param x An awaitable value, i.e. a [promise][promises::promise].
 #' @export
 await <- function(x) {
-  abort("`await()` can't be called directly or within function arguments.")
+    abort("`await()` can't be called directly or within function arguments.")
 }
 
 #' Sleep asynchronously
@@ -75,9 +76,11 @@ await <- function(x) {
 #' @return A chainable promise.
 #' @export
 async_sleep <- function(seconds) {
-  promises::promise(function(resolve, reject) {
-    later::later(~ resolve(NULL) , delay = seconds)
-  })
+    .f <- function(resolve, reject) {
+        later::later(~ resolve(NULL), delay = seconds)
+    }
+
+    promises::promise(.f)
 }
 
 #' Construct an async generator
@@ -120,25 +123,29 @@ async_sleep <- function(seconds) {
 #' }
 #' @export
 async_generator <- function(fn) {
-  assert_lambda(substitute(fn))
-  generator0(fn, type = "async_generator")
+    assert_lambda(substitute(fn))
+    generator0(fn, type = "async_generator")
 }
+
 #' @rdname async_generator
 #' @inheritParams await
 #' @export
 await_each <- function(x) {
-  abort("`await_each()` must be called within a `for` loop of an async function.")
+    abort(
+        "`await_each()` must be called within a `for` loop of an async function."
+    )
 }
 
 #' @export
 print.coro_async <- function(x, ..., internals = FALSE) {
-  writeLines("<async>")
-  print_generator(x, ..., internals = internals)
+    writeLines("<async>")
+    print_generator(x, ..., internals = internals)
 }
+
 #' @export
 print.coro_async_generator <- function(x, ..., internals = FALSE) {
-  writeLines("<async/generator>")
-  print_generator(x, ..., internals = internals)
+    writeLines("<async/generator>")
+    print_generator(x, ..., internals = internals)
 }
 
 
@@ -167,45 +174,43 @@ print.coro_async_generator <- function(x, ..., internals = FALSE) {
 #' @keywords internal
 #' @export
 async_ops <- function(package, then, as_promise) {
-  stopifnot(
-    is_string(package),
-    is_function(then),
-    is_function(as_promise)
-  )
-  structure(
-    list(
-      package = package,
-      then = then,
-      as_promise = as_promise
-    ),
-    class = "coro_async_ops"
-  )
+    stopifnot(
+        is_string(package),
+        is_function(then),
+        is_function(as_promise)
+    )
+    structure(
+        list(
+            package = package,
+            then = then,
+            as_promise = as_promise
+        ),
+        class = "coro_async_ops"
+    )
 }
 
 get_async_ops <- function(env) {
-  ops <- env_get(env, ".__coro_async_ops__.", inherit = TRUE, default = NULL)
+    ops <- env_get(env, ".__coro_async_ops__.", inherit = TRUE, default = NULL)
 
-  if (!is_null(ops)) {
-    return(ops)
-  }
+    if (!is_null(ops)) return(ops)
 
-  async_ops(
-    package = "promises",
-    then = op_then,
-    as_promise = op_as_promise
-  )
+    async_ops(
+        package = "promises",
+        then = op_then,
+        as_promise = op_as_promise
+    )
 }
+
 op_then <- function(x, callback) {
-  promises::then(
-    x,
-    onFulfilled = callback,
-    onRejected = function(cnd) callback(stop(cnd))
-  )
+    promises::then(
+        x,
+        onFulfilled = callback,
+        onRejected = function(cnd) callback(stop(cnd))
+    )
 }
+
 op_as_promise <- function(x) {
-  if (promises::is.promise(x)) {
-    x
-  } else {
-    promises::promise_resolve(x)
-  }
+    if (promises::is.promise(x)) return(x)
+
+    return(promises::promise_resolve(x))
 }
